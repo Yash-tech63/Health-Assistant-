@@ -60,7 +60,7 @@ export const treatmentVideosList = [
         ]
     }
 ];
-export const TreatmentVideoModal = ({ isOpen, onClose, }) => {
+export const TreatmentVideoModal = ({ isOpen, onClose, initialVideoId }) => {
     const selectedId = initialVideoId || 'VID-01';
     const [activeVideo, setActiveVideo] = useState(treatmentVideosList.find(v => v.id === selectedId) || treatmentVideosList[0]);
     const [isPlaying, setIsPlaying] = useState(false);
