@@ -1,0 +1,1 @@
+const router = require('express').Router(); const c = require('../controllers/workflowController'); const auth = require('../middleware/authMiddleware'); router.use(auth.verifyToken); router.post('/create', c.createTele); router.post('/:id/start', c.startTele); router.post('/:id/end', c.endTele); router.get('/my', c.myTele); module.exports = router;

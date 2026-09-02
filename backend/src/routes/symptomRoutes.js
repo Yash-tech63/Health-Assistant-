@@ -1,0 +1,1 @@
+const router = require('express').Router(); const c = require('../controllers/workflowController'); const auth = require('../middleware/authMiddleware'); router.post('/assess', auth.verifyToken, auth.authorizeRoles('patient'), c.assess); module.exports = router;

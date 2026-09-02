@@ -1,0 +1,1 @@
+const router = require('express').Router(); const c = require('../controllers/workflowController'); const auth = require('../middleware/authMiddleware'); router.use(auth.verifyToken); router.get('/', c.notifications); router.put('/:id/read', c.readNotification); module.exports = router;

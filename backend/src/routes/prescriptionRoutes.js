@@ -1,0 +1,1 @@
+const router = require('express').Router(); const c = require('../controllers/clinicalController'); const auth = require('../middleware/authMiddleware'); router.use(auth.verifyToken); router.post('/', auth.authorizeRoles('doctor'), c.createPrescription); router.get('/my', c.myPrescriptions); router.get('/:id', c.getPrescription); module.exports = router;

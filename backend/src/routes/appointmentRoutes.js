@@ -1,0 +1,2 @@
+const router = require('express').Router(); const c = require('../controllers/appointmentController'); const auth = require('../middleware/authMiddleware');
+router.use(auth.verifyToken); router.post('/', auth.authorizeRoles('patient'), c.create); router.get('/my', c.my); router.get('/doctor/:id', auth.authorizeRoles('doctor', 'admin'), c.doctorAppointments); router.put('/:id/cancel', auth.authorizeRoles('patient', 'admin'), c.cancel); module.exports = router;
