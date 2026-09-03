@@ -1,246 +1,1099 @@
 "use client";
-import React, { useEffect, useRef } from 'react';
-// Helper to convert CSS color string (hex or rgb) to normalized [r, g, b] array for GLSL uniforms
+
+import React, { useEffect, useRef } from "react";
+
+/* =========================================================
+   COLOR PARSER
+   Supports:
+   - #fff
+   - #ffffff
+   - rgb(255, 255, 255)
+   - rgba(255, 255, 255, 0.5)
+========================================================= */
+
 function parseColorToRGB(colorStr) {
-    if (!colorStr)
+    if (!colorStr || typeof colorStr !== "string") {
         return [1, 1, 1];
-    // Hex format (#fff or #ffffff)
-    if (colorStr.startsWith('#')) {
-        let hex = colorStr.slice(1);
-        if (hex.length === 3) {
-            hex = hex.split('').map(c => c + c).join('');
-        }
-        const num = parseInt(hex, 16);
-        return [
-            ((num >> 16) & 255) / 255,
-            ((num >> 8) & 255) / 255,
-            (num & 255) / 255,
-        ];
     }
-    // RGB format rgb(r, g, b)
-    const rgbMatch = colorStr.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+
+    const color = colorStr.trim();
+
+    // HEX FORMAT
+    if (color.startsWith("#")) {
+        let hex = color.slice(1);
+
+        if (hex.length === 3) {
+            hex = hex
+                .split("")
+                .map((char) => char + char)
+                .join("");
+        }
+
+        if (hex.length === 6) {
+            const num = parseInt(hex, 16);
+
+            if (!Number.isNaN(num)) {
+                return [
+                    ((num >> 16) & 255) / 255,
+                    ((num >> 8) & 255) / 255,
+                    (num & 255) / 255,
+                ];
+            }
+        }
+    }
+
+    // RGB / RGBA FORMAT
+    const rgbMatch = color.match(
+        /rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/
+    );
+
     if (rgbMatch) {
         return [
-            parseInt(rgbMatch[1], 10) / 255,
-            parseInt(rgbMatch[2], 10) / 255,
-            parseInt(rgbMatch[3], 10) / 255,
+            Math.min(255, Math.max(0, Number(rgbMatch[1]))) / 255,
+            Math.min(255, Math.max(0, Number(rgbMatch[2]))) / 255,
+            Math.min(255, Math.max(0, Number(rgbMatch[3]))) / 255,
         ];
     }
+
     return [1, 1, 1];
 }
+
+/* =========================================================
+   VERTEX SHADER
+   WebGL 1 Compatible
+========================================================= */
+
 const VERTEX_SHADER_SOURCE = `
-  attribute vec2 a_position;
-  void main() {
+attribute vec2 a_position;
+
+void main() {
     gl_Position = vec4(a_position, 0.0, 1.0);
-  }
+}
 `;
+
+/* =========================================================
+   FRAGMENT SHADER
+   WebGL 1 Compatible
+========================================================= */
+
 const FRAGMENT_SHADER_SOURCE = `
-  precision mediump float;
+precision mediump float;
 
-  uniform vec2 u_resolution;
-  uniform float u_time;
-  uniform float u_speed;
-  uniform float u_count;
-  uniform vec3 u_cloudColor;
-  uniform vec3 u_skyTopColor;
-  uniform vec3 u_skyBottomColor;
+uniform vec2 u_resolution;
+uniform float u_time;
+uniform float u_speed;
+uniform float u_count;
 
-  // 2D Hash function for GLSL ES 1.00
-  vec2 hash22(vec2 p) {
-    p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
-    return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);
-  }
+uniform vec3 u_cloudColor;
+uniform vec3 u_skyTopColor;
+uniform vec3 u_skyBottomColor;
 
-  // 2D Perlin / Value Noise
-  float noise(vec2 p) {
+
+/* RANDOM HASH */
+
+float hash(vec2 p) {
+    return fract(
+        sin(
+            dot(
+                p,
+                vec2(127.1, 311.7)
+            )
+        ) * 43758.5453123
+    );
+}
+
+
+/* VALUE NOISE */
+
+float noise(vec2 p) {
+
     vec2 i = floor(p);
+
     vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
+
+    f = f * f * (3.0 - 2.0 * f);
+
+    float a = hash(i);
+
+    float b = hash(
+        i + vec2(1.0, 0.0)
+    );
+
+    float c = hash(
+        i + vec2(0.0, 1.0)
+    );
+
+    float d = hash(
+        i + vec2(1.0, 1.0)
+    );
 
     return mix(
-      mix(dot(hash22(i + vec2(0.0, 0.0)), f - vec2(0.0, 0.0)),
-          dot(hash22(i + vec2(1.0, 0.0)), f - vec2(1.0, 0.0)), u.x),
-      mix(dot(hash22(i + vec2(0.0, 1.0)), f - vec2(0.0, 1.0)),
-          dot(hash22(i + vec2(1.0, 1.0)), f - vec2(1.0, 1.0)), u.x),
-      u.y
+        mix(a, b, f.x),
+        mix(c, d, f.x),
+        f.y
     );
-  }
+}
 
-  // Fractional Brownian Motion (FBM) with WebGL 1.0 compliant loop
-  float fbm(vec2 st) {
+
+/* FRACTIONAL BROWNIAN MOTION */
+
+float fbm(vec2 p) {
+
     float value = 0.0;
+
     float amplitude = 0.5;
-    vec2 shift = vec2(100.0);
 
-    for (int i = 0; i < 4; i++) {
-      value += amplitude * (noise(st) * 0.5 + 0.5);
-      st = st * 2.0 + shift;
-      amplitude *= 0.5;
+    // Fixed loop count for WebGL 1 compatibility
+    for (int i = 0; i < 5; i++) {
+
+        value += amplitude * noise(p);
+
+        p *= 2.0;
+
+        amplitude *= 0.5;
     }
+
     return value;
-  }
+}
 
-  void main() {
-    vec2 st = gl_FragCoord.xy / u_resolution.xy;
-    float aspect = u_resolution.x / u_resolution.y;
-    vec2 uv = st;
-    uv.x *= aspect;
 
-    // Sky Background Gradient (Top to Bottom)
-    vec3 skyColor = mix(u_skyBottomColor, u_skyTopColor, st.y);
+/* MAIN */
 
-    // Animate coordinates based on speed and time
-    vec2 motion = vec2(u_time * u_speed * 0.05, u_time * u_speed * 0.01);
-    vec2 q = uv * 2.5 + motion;
+void main() {
 
-    // Generate procedural cloud noise
-    float cloudDensity = fbm(q);
+    // Prevent division by zero
+    vec2 resolution = max(
+        u_resolution,
+        vec2(1.0)
+    );
 
-    // Apply cloud thresholding for natural soft edges
-    float alpha = smoothstep(0.35, 0.75, cloudDensity);
+    vec2 uv =
+        gl_FragCoord.xy /
+        resolution.xy;
 
-    // Blend sky and cloud colors
-    vec3 finalColor = mix(skyColor, u_cloudColor, alpha * 0.7);
 
-    gl_FragColor = vec4(finalColor, 1.0);
-  }
+    /* ASPECT RATIO */
+
+    float aspect =
+        resolution.x /
+        resolution.y;
+
+    vec2 cloudUV =
+        uv;
+
+    cloudUV.x *= aspect;
+
+
+    /* SKY GRADIENT */
+
+    vec3 skyColor = mix(
+        u_skyBottomColor,
+        u_skyTopColor,
+        uv.y
+    );
+
+
+    /* ANIMATION */
+
+    float animationTime =
+        u_time *
+        u_speed;
+
+    vec2 movement =
+        vec2(
+            animationTime * 0.05,
+            animationTime * 0.015
+        );
+
+
+    /* CLOUD SCALE */
+
+    float cloudScale =
+        1.2 +
+        (u_count * 0.35);
+
+
+    vec2 cloudPosition =
+        cloudUV *
+        cloudScale +
+        movement;
+
+
+    /* CLOUD NOISE */
+
+    float cloudNoise =
+        fbm(
+            cloudPosition
+        );
+
+
+    float detailNoise =
+        fbm(
+            cloudPosition * 0.65 +
+            vec2(12.0, 8.0)
+        );
+
+
+    cloudNoise +=
+        detailNoise *
+        0.35;
+
+
+    cloudNoise *=
+        0.8;
+
+
+    /* CLOUD MASK */
+
+    float cloudMask =
+        smoothstep(
+            0.30,
+            0.72,
+            cloudNoise
+        );
+
+
+    cloudMask *=
+        0.85;
+
+
+    /* FINAL COLOR */
+
+    vec3 finalColor =
+        mix(
+            skyColor,
+            u_cloudColor,
+            cloudMask
+        );
+
+
+    gl_FragColor =
+        vec4(
+            finalColor,
+            1.0
+        );
+}
 `;
-export const CloudShader = ({ speed = 0.5, count = 3, cloudColor = '#ffffff', skyTopColor = '#fce7f3', skyBottomColor = '#ffffff', className = '', children, }) => {
+
+
+/* =========================================================
+   CLOUD SHADER COMPONENT
+========================================================= */
+
+export const CloudShader = ({
+    speed = 0.5,
+    count = 3,
+    cloudColor = "#ffffff",
+    skyTopColor = "#fce7f3",
+    skyBottomColor = "#ffffff",
+    className = "",
+    children,
+}) => {
     const containerRef = useRef(null);
+
     const canvasRef = useRef(null);
+
+    const animationFrameRef = useRef(null);
+
+
+    /* =====================================================
+       WEBGL SETUP
+    ===================================================== */
+
     useEffect(() => {
         const canvas = canvasRef.current;
+
         const container = containerRef.current;
-        if (!canvas || !container)
-            return;
-        const gl = canvas.getContext('webgl', { alpha: false, preserveDrawingBuffer: false });
-        if (!gl) {
-            console.warn('WebGL context not available for CloudShader.');
-            return;
+
+        if (!canvas || !container) {
+            return undefined;
         }
-        // Check user preference for reduced motion
-        const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
-        let isReducedMotion = mediaQuery.matches;
-        const handleMotionChange = (e) => {
-            isReducedMotion = e.matches;
+
+
+        /* WEBGL CONTEXT */
+
+        const gl = canvas.getContext("webgl", {
+            alpha: false,
+            antialias: true,
+            preserveDrawingBuffer: false,
+        });
+
+
+        if (!gl) {
+            console.warn(
+                "CloudShader: WebGL is not supported by this browser."
+            );
+
+            return undefined;
+        }
+
+
+        let destroyed = false;
+
+
+        /* =================================================
+           REDUCED MOTION
+        ================================================= */
+
+        const mediaQuery = window.matchMedia(
+            "(prefers-reduced-motion: reduce)"
+        );
+
+        let isReducedMotion =
+            mediaQuery.matches;
+
+
+        const handleMotionChange = (event) => {
+            isReducedMotion =
+                event.matches;
         };
-        mediaQuery.addEventListener('change', handleMotionChange);
-        // 1. Compile Shaders
-        const createShader = (type, source) => {
-            const shader = gl.createShader(type);
-            if (!shader)
-                return null;
-            gl.shaderSource(shader, source);
-            gl.compileShader(shader);
-            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-                const infoLog = gl.getShaderInfoLog(shader);
-                console.error('Shader compile error:', infoLog || 'Unknown shader compile error');
-                gl.deleteShader(shader);
+
+
+        if (typeof mediaQuery.addEventListener === "function") {
+            mediaQuery.addEventListener(
+                "change",
+                handleMotionChange
+            );
+        } else if (typeof mediaQuery.addListener === "function") {
+            mediaQuery.addListener(
+                handleMotionChange
+            );
+        }
+
+
+        /* =================================================
+           CREATE SHADER FUNCTION
+        ================================================= */
+
+        const createShader = (
+            type,
+            source
+        ) => {
+            const shader =
+                gl.createShader(type);
+
+
+            if (!shader) {
+                console.error(
+                    "CloudShader: Failed to create shader."
+                );
+
                 return null;
             }
+
+
+            gl.shaderSource(
+                shader,
+                source
+            );
+
+
+            gl.compileShader(
+                shader
+            );
+
+
+            const compiled =
+                gl.getShaderParameter(
+                    shader,
+                    gl.COMPILE_STATUS
+                );
+
+
+            if (!compiled) {
+                const error =
+                    gl.getShaderInfoLog(
+                        shader
+                    );
+
+
+                console.group(
+                    "CloudShader Compile Error"
+                );
+
+                console.error(
+                    type === gl.VERTEX_SHADER
+                        ? "VERTEX SHADER ERROR"
+                        : "FRAGMENT SHADER ERROR"
+                );
+
+                console.error(
+                    error ||
+                    "Unknown shader compile error"
+                );
+
+                console.log(
+                    "Shader source:"
+                );
+
+                console.log(
+                    source
+                );
+
+                console.groupEnd();
+
+
+                gl.deleteShader(
+                    shader
+                );
+
+                return null;
+            }
+
+
             return shader;
         };
-        const vertexShader = createShader(gl.VERTEX_SHADER, VERTEX_SHADER_SOURCE);
-        const fragmentShader = createShader(gl.FRAGMENT_SHADER, FRAGMENT_SHADER_SOURCE);
-        if (!vertexShader || !fragmentShader)
-            return;
-        // 2. Link Program
-        const program = gl.createProgram();
-        if (!program)
-            return;
-        gl.attachShader(program, vertexShader);
-        gl.attachShader(program, fragmentShader);
-        gl.linkProgram(program);
-        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-            const linkLog = gl.getProgramInfoLog(program);
-            console.error('Program link error:', linkLog || 'Unknown program link error');
-            gl.deleteProgram(program);
-            return;
+
+
+        /* =================================================
+           COMPILE SHADERS
+        ================================================= */
+
+        const vertexShader =
+            createShader(
+                gl.VERTEX_SHADER,
+                VERTEX_SHADER_SOURCE
+            );
+
+
+        if (!vertexShader) {
+            return undefined;
         }
-        gl.useProgram(program);
-        // 3. Fullscreen Quad Geometry Buffer
-        const positionBuffer = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-        const positions = new Float32Array([
-            -1.0, -1.0,
-            1.0, -1.0,
-            -1.0, 1.0,
-            -1.0, 1.0,
-            1.0, -1.0,
-            1.0, 1.0,
-        ]);
-        gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
-        const positionLocation = gl.getAttribLocation(program, 'a_position');
-        gl.enableVertexAttribArray(positionLocation);
-        gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
-        // 4. Uniform Locations
-        const uResolution = gl.getUniformLocation(program, 'u_resolution');
-        const uTime = gl.getUniformLocation(program, 'u_time');
-        const uSpeed = gl.getUniformLocation(program, 'u_speed');
-        const uCount = gl.getUniformLocation(program, 'u_count');
-        const uCloudColor = gl.getUniformLocation(program, 'u_cloudColor');
-        const uSkyTopColor = gl.getUniformLocation(program, 'u_skyTopColor');
-        const uSkyBottomColor = gl.getUniformLocation(program, 'u_skyBottomColor');
-        // 5. Handle Resize
+
+
+        const fragmentShader =
+            createShader(
+                gl.FRAGMENT_SHADER,
+                FRAGMENT_SHADER_SOURCE
+            );
+
+
+        if (!fragmentShader) {
+            gl.deleteShader(
+                vertexShader
+            );
+
+            return undefined;
+        }
+
+
+        /* =================================================
+           CREATE PROGRAM
+        ================================================= */
+
+        const program =
+            gl.createProgram();
+
+
+        if (!program) {
+            gl.deleteShader(
+                vertexShader
+            );
+
+            gl.deleteShader(
+                fragmentShader
+            );
+
+            return undefined;
+        }
+
+
+        gl.attachShader(
+            program,
+            vertexShader
+        );
+
+
+        gl.attachShader(
+            program,
+            fragmentShader
+        );
+
+
+        gl.linkProgram(
+            program
+        );
+
+
+        const linked =
+            gl.getProgramParameter(
+                program,
+                gl.LINK_STATUS
+            );
+
+
+        if (!linked) {
+            const error =
+                gl.getProgramInfoLog(
+                    program
+                );
+
+
+            console.error(
+                "CloudShader Program Link Error:",
+                error ||
+                "Unknown program link error"
+            );
+
+
+            gl.deleteProgram(
+                program
+            );
+
+            gl.deleteShader(
+                vertexShader
+            );
+
+            gl.deleteShader(
+                fragmentShader
+            );
+
+            return undefined;
+        }
+
+
+        gl.useProgram(
+            program
+        );
+
+
+        /* =================================================
+           FULLSCREEN QUAD BUFFER
+        ================================================= */
+
+        const positionBuffer =
+            gl.createBuffer();
+
+
+        if (!positionBuffer) {
+            console.error(
+                "CloudShader: Failed to create buffer."
+            );
+
+            gl.deleteProgram(
+                program
+            );
+
+            gl.deleteShader(
+                vertexShader
+            );
+
+            gl.deleteShader(
+                fragmentShader
+            );
+
+            return undefined;
+        }
+
+
+        gl.bindBuffer(
+            gl.ARRAY_BUFFER,
+            positionBuffer
+        );
+
+
+        const positions =
+            new Float32Array([
+                -1.0, -1.0,
+                1.0, -1.0,
+                -1.0, 1.0,
+
+                -1.0, 1.0,
+                1.0, -1.0,
+                1.0, 1.0,
+            ]);
+
+
+        gl.bufferData(
+            gl.ARRAY_BUFFER,
+            positions,
+            gl.STATIC_DRAW
+        );
+
+
+        /* =================================================
+           POSITION ATTRIBUTE
+        ================================================= */
+
+        const positionLocation =
+            gl.getAttribLocation(
+                program,
+                "a_position"
+            );
+
+
+        if (positionLocation === -1) {
+            console.error(
+                "CloudShader: a_position attribute not found."
+            );
+
+            gl.deleteBuffer(
+                positionBuffer
+            );
+
+            gl.deleteProgram(
+                program
+            );
+
+            return undefined;
+        }
+
+
+        gl.enableVertexAttribArray(
+            positionLocation
+        );
+
+
+        gl.vertexAttribPointer(
+            positionLocation,
+            2,
+            gl.FLOAT,
+            false,
+            0,
+            0
+        );
+
+
+        /* =================================================
+           UNIFORM LOCATIONS
+        ================================================= */
+
+        const uniforms = {
+            resolution:
+                gl.getUniformLocation(
+                    program,
+                    "u_resolution"
+                ),
+
+            time:
+                gl.getUniformLocation(
+                    program,
+                    "u_time"
+                ),
+
+            speed:
+                gl.getUniformLocation(
+                    program,
+                    "u_speed"
+                ),
+
+            count:
+                gl.getUniformLocation(
+                    program,
+                    "u_count"
+                ),
+
+            cloudColor:
+                gl.getUniformLocation(
+                    program,
+                    "u_cloudColor"
+                ),
+
+            skyTopColor:
+                gl.getUniformLocation(
+                    program,
+                    "u_skyTopColor"
+                ),
+
+            skyBottomColor:
+                gl.getUniformLocation(
+                    program,
+                    "u_skyBottomColor"
+                ),
+        };
+
+
+        /* =================================================
+           PARSE COLORS
+        ================================================= */
+
+        const cloudRGB =
+            parseColorToRGB(
+                cloudColor
+            );
+
+
+        const skyTopRGB =
+            parseColorToRGB(
+                skyTopColor
+            );
+
+
+        const skyBottomRGB =
+            parseColorToRGB(
+                skyBottomColor
+            );
+
+
+        /* =================================================
+           RESIZE CANVAS
+        ================================================= */
+
         const resizeCanvas = () => {
-            if (!container || !canvas)
+            if (
+                destroyed ||
+                !container ||
+                !canvas
+            ) {
                 return;
-            const displayWidth = container.clientWidth;
-            const displayHeight = container.clientHeight;
-            if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
-                canvas.width = displayWidth;
-                canvas.height = displayHeight;
-                gl.viewport(0, 0, displayWidth, displayHeight);
+            }
+
+
+            const rect =
+                container.getBoundingClientRect();
+
+
+            const dpr =
+                Math.min(
+                    window.devicePixelRatio || 1,
+                    2
+                );
+
+
+            const width =
+                Math.max(
+                    1,
+                    Math.floor(
+                        rect.width * dpr
+                    )
+                );
+
+
+            const height =
+                Math.max(
+                    1,
+                    Math.floor(
+                        rect.height * dpr
+                    )
+                );
+
+
+            if (
+                canvas.width !== width ||
+                canvas.height !== height
+            ) {
+                canvas.width =
+                    width;
+
+                canvas.height =
+                    height;
+
+                gl.viewport(
+                    0,
+                    0,
+                    width,
+                    height
+                );
             }
         };
-        const resizeObserver = new ResizeObserver(() => {
-            resizeCanvas();
-        });
-        resizeObserver.observe(container);
+
+
+        /* =================================================
+           RESIZE OBSERVER
+        ================================================= */
+
+        let resizeObserver = null;
+
+
+        if (
+            typeof ResizeObserver !==
+            "undefined"
+        ) {
+            resizeObserver =
+                new ResizeObserver(
+                    resizeCanvas
+                );
+
+
+            resizeObserver.observe(
+                container
+            );
+
+        } else {
+            window.addEventListener(
+                "resize",
+                resizeCanvas
+            );
+        }
+
+
         resizeCanvas();
-        // 6. Animation Loop
-        let animationFrameId;
-        let startTime = performance.now();
+
+
+        /* =================================================
+           ANIMATION
+        ================================================= */
+
+        const startTime =
+            performance.now();
+
+
         const render = (now) => {
-            const elapsedTime = (now - startTime) / 1000;
-            gl.useProgram(program);
-            // Pass Uniforms
-            gl.uniform2f(uResolution, canvas.width, canvas.height);
-            gl.uniform1f(uTime, isReducedMotion ? 0 : elapsedTime);
-            gl.uniform1f(uSpeed, speed);
-            gl.uniform1f(uCount, Math.min(6, Math.max(1, count)));
-            const cloudRGB = parseColorToRGB(cloudColor);
-            const skyTopRGB = parseColorToRGB(skyTopColor);
-            const skyBottomRGB = parseColorToRGB(skyBottomColor);
-            gl.uniform3f(uCloudColor, cloudRGB[0], cloudRGB[1], cloudRGB[2]);
-            gl.uniform3f(uSkyTopColor, skyTopRGB[0], skyTopRGB[1], skyTopRGB[2]);
-            gl.uniform3f(uSkyBottomColor, skyBottomRGB[0], skyBottomRGB[1], skyBottomRGB[2]);
-            gl.drawArrays(gl.TRIANGLES, 0, 6);
-            animationFrameId = requestAnimationFrame(render);
+            if (destroyed) {
+                return;
+            }
+
+
+            resizeCanvas();
+
+
+            const elapsedTime =
+                (now - startTime) /
+                1000;
+
+
+            gl.useProgram(
+                program
+            );
+
+
+            gl.bindBuffer(
+                gl.ARRAY_BUFFER,
+                positionBuffer
+            );
+
+
+            gl.enableVertexAttribArray(
+                positionLocation
+            );
+
+
+            gl.vertexAttribPointer(
+                positionLocation,
+                2,
+                gl.FLOAT,
+                false,
+                0,
+                0
+            );
+
+
+            /* RESOLUTION */
+
+            if (uniforms.resolution) {
+                gl.uniform2f(
+                    uniforms.resolution,
+                    canvas.width,
+                    canvas.height
+                );
+            }
+
+
+            /* TIME */
+
+            if (uniforms.time) {
+                gl.uniform1f(
+                    uniforms.time,
+                    isReducedMotion
+                        ? 0
+                        : elapsedTime
+                );
+            }
+
+
+            /* SPEED */
+
+            if (uniforms.speed) {
+                gl.uniform1f(
+                    uniforms.speed,
+                    Number(speed) || 0.5
+                );
+            }
+
+
+            /* COUNT */
+
+            if (uniforms.count) {
+                const safeCount =
+                    Math.min(
+                        6,
+                        Math.max(
+                            1,
+                            Number(count) || 3
+                        )
+                    );
+
+
+                gl.uniform1f(
+                    uniforms.count,
+                    safeCount
+                );
+            }
+
+
+            /* CLOUD COLOR */
+
+            if (uniforms.cloudColor) {
+                gl.uniform3f(
+                    uniforms.cloudColor,
+                    cloudRGB[0],
+                    cloudRGB[1],
+                    cloudRGB[2]
+                );
+            }
+
+
+            /* SKY TOP COLOR */
+
+            if (uniforms.skyTopColor) {
+                gl.uniform3f(
+                    uniforms.skyTopColor,
+                    skyTopRGB[0],
+                    skyTopRGB[1],
+                    skyTopRGB[2]
+                );
+            }
+
+
+            /* SKY BOTTOM COLOR */
+
+            if (uniforms.skyBottomColor) {
+                gl.uniform3f(
+                    uniforms.skyBottomColor,
+                    skyBottomRGB[0],
+                    skyBottomRGB[1],
+                    skyBottomRGB[2]
+                );
+            }
+
+
+            /* DRAW */
+
+            gl.drawArrays(
+                gl.TRIANGLES,
+                0,
+                6
+            );
+
+
+            animationFrameRef.current =
+                requestAnimationFrame(
+                    render
+                );
         };
-        animationFrameId = requestAnimationFrame(render);
-        // 7. Cleanup on Unmount
+
+
+        animationFrameRef.current =
+            requestAnimationFrame(
+                render
+            );
+
+
+        /* =================================================
+           CLEANUP
+        ================================================= */
+
         return () => {
-            cancelAnimationFrame(animationFrameId);
-            resizeObserver.disconnect();
-            mediaQuery.removeEventListener('change', handleMotionChange);
-            if (gl) {
-                if (positionBuffer)
-                    gl.deleteBuffer(positionBuffer);
-                if (vertexShader)
-                    gl.deleteShader(vertexShader);
-                if (fragmentShader)
-                    gl.deleteShader(fragmentShader);
-                if (program)
-                    gl.deleteProgram(program);
-                gl.getExtension('WEBGL_lose_context')?.loseContext();
+            destroyed = true;
+
+
+            if (
+                animationFrameRef.current !==
+                null
+            ) {
+                cancelAnimationFrame(
+                    animationFrameRef.current
+                );
+
+                animationFrameRef.current =
+                    null;
+            }
+
+
+            if (resizeObserver) {
+                resizeObserver.disconnect();
+            } else {
+                window.removeEventListener(
+                    "resize",
+                    resizeCanvas
+                );
+            }
+
+
+            if (
+                typeof mediaQuery.removeEventListener ===
+                "function"
+            ) {
+                mediaQuery.removeEventListener(
+                    "change",
+                    handleMotionChange
+                );
+
+            } else if (
+                typeof mediaQuery.removeListener ===
+                "function"
+            ) {
+                mediaQuery.removeListener(
+                    handleMotionChange
+                );
+            }
+
+
+            try {
+                gl.deleteBuffer(
+                    positionBuffer
+                );
+
+                gl.deleteProgram(
+                    program
+                );
+
+                gl.deleteShader(
+                    vertexShader
+                );
+
+                gl.deleteShader(
+                    fragmentShader
+                );
+
+            } catch (error) {
+                console.warn(
+                    "CloudShader cleanup error:",
+                    error
+                );
             }
         };
-    }, [speed, count, cloudColor, skyTopColor, skyBottomColor]);
-    return (<div ref={containerRef} className={`relative overflow-hidden ${className}`}>
-      {/* WebGL Canvas positioned absolutely behind children */}
-      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full -z-10 pointer-events-none block"/>
-      {/* Foreground Content */}
-      <div className="relative z-10 w-full h-full">{children}</div>
-    </div>);
+
+    }, [
+        speed,
+        count,
+        cloudColor,
+        skyTopColor,
+        skyBottomColor,
+    ]);
+
+
+    /* =====================================================
+       JSX
+    ===================================================== */
+
+    return (
+        <div
+            ref={containerRef}
+            className={`relative overflow-hidden ${className}`}
+        >
+            {/* CLOUD WEBGL BACKGROUND */}
+
+            <canvas
+                ref={canvasRef}
+                className="
+                    absolute
+                    inset-0
+                    w-full
+                    h-full
+                    pointer-events-none
+                    block
+                    -z-10
+                "
+            />
+
+            {/* FOREGROUND CONTENT */}
+
+            <div className="relative z-10 w-full h-full">
+                {children}
+            </div>
+        </div>
+    );
 };
+
+export default CloudShader;

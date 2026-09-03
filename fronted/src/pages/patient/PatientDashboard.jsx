@@ -1,205 +1,950 @@
-import React, { useState } from 'react';
-import { useHealthStore } from '../../context/HealthStoreContext';
-import { useAuth } from '../../context/AuthContext';
-import { Card, CardBody, CardHeader, CardFooter } from '../../components/Card';
-import { Badge } from '../../components/Badge';
-import { Button } from '../../components/Button';
-import { Calendar, FileText, Pill, ShieldCheck, MapPin, Activity, Stethoscope, Play, Landmark } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
-import { TreatmentVideoModal } from '../../components/media/TreatmentVideoModal';
+import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+
+import api from "../../services/api";
+
+import { Card, CardBody } from "../../components/Card";
+import { Button } from "../../components/Button";
+import { Badge } from "../../components/Badge";
+
+import {
+  User,
+  Phone,
+  Mail,
+  HeartPulse,
+  CalendarDays,
+  Video,
+  ClipboardList,
+  Activity,
+  MapPin,
+  Loader2,
+  AlertCircle,
+  RefreshCw,
+  ChevronRight,
+  ShieldCheck,
+  Stethoscope,
+} from "lucide-react";
+
 export const PatientDashboard = () => {
-    const { user } = useAuth();
-    const { referrals, appointments, prescriptions, diagnostics } = useHealthStore();
-    const navigate = useNavigate();
-    const [videoModalOpen, setVideoModalOpen] = useState(false);
-    // Get data specifically for Rajesh Kumar (P-101)
-    const patientId = 'P-101';
-    const myAppointments = appointments.filter(a => a.patientId === patientId).slice(0, 3);
-    const myReferrals = referrals.filter(r => r.patientId === patientId);
-    const myPrescriptions = prescriptions.filter(p => p.patientId === patientId);
-    const myDiagnostics = diagnostics.filter(d => d.patientId === patientId);
-    // Workflow tracker steps for Rajesh Kumar's journey
-    const journeyTiers = [
-        { label: 'Rural PHC', desc: 'Dhami PHC (Consulted Dr. Chauhan)', status: 'Completed' },
-        { label: 'District Hospital', desc: 'Shimla District General (Approved - echo done)', status: 'Completed' },
-        { label: 'Specialist T3', desc: 'IGMC Specialist (Angiogram pending)', status: 'Active' },
-        { label: 'Pharmacy Check', desc: 'Metformin & Atorvastatin stock', status: 'Pending' }
-    ];
-    return (<div className="space-y-6">
-      
-      {/* Welcome Banner */}
-      <div className="bg-slate-900 text-white rounded-2xl p-6 sm:p-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-6 border border-slate-800 shadow-xs">
-        <div className="space-y-1.5">
-          <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight">Good morning, {user?.name}!</h1>
-          <p className="text-xs text-slate-300 max-w-md leading-relaxed">
-            Welcome to your digital health dashboard. Your ABHA ID links all health center consultations and district hospital records in a unified thread.
+  const navigate = useNavigate();
+
+  // ==========================================
+  // STATE
+  // ==========================================
+
+  const [patientProfile, setPatientProfile] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  // ==========================================
+  // GET LOGGED IN USER FROM LOCAL STORAGE
+  // ==========================================
+
+  const getStoredUser = () => {
+    try {
+      const storedUser = localStorage.getItem("user");
+
+      if (!storedUser) {
+        return null;
+      }
+
+      return JSON.parse(storedUser);
+    } catch (error) {
+      console.error("Error reading stored user:", error);
+      return null;
+    }
+  };
+
+  const storedUser = getStoredUser();
+
+  // ==========================================
+  // GET PATIENT PROFILE
+  // ==========================================
+
+  const getPatientProfile = async () => {
+    try {
+      setLoading(true);
+      setError("");
+
+      // Get JWT token
+      const token =
+        localStorage.getItem("token") ||
+        localStorage.getItem("accessToken") ||
+        localStorage.getItem("authToken");
+
+      console.log("====================================");
+      console.log("FETCHING PATIENT PROFILE");
+      console.log("TOKEN EXISTS:", !!token);
+      console.log("====================================");
+
+      // If no token
+      if (!token) {
+        throw new Error(
+          "Authentication token not found. Please login again."
+        );
+      }
+
+      // ==========================================
+      // GET PATIENT PROFILE API
+      // ==========================================
+
+      const response = await api.get("/patients/profile");
+
+      console.log(
+        "PATIENT PROFILE RESPONSE:",
+        response.data
+      );
+
+      if (!response.data?.success) {
+        throw new Error(
+          response.data?.message ||
+          "Failed to fetch patient profile"
+        );
+      }
+
+      const patientData = response.data?.data;
+
+      if (!patientData) {
+        throw new Error("Patient profile not found");
+      }
+
+      // ==========================================
+      // SAVE PROFILE IN STATE
+      // ==========================================
+
+      setPatientProfile(patientData);
+
+      // ==========================================
+      // UPDATE LOCAL STORAGE USER
+      // ==========================================
+
+      if (patientData?.user) {
+        localStorage.setItem(
+          "user",
+          JSON.stringify(patientData.user)
+        );
+      }
+
+      console.log("PATIENT PROFILE LOADED");
+      console.log(
+        "PATIENT NAME:",
+        patientData?.user?.fullName
+      );
+
+    } catch (err) {
+      console.error(
+        "GET PATIENT PROFILE ERROR:",
+        err
+      );
+
+      console.error(
+        "API ERROR RESPONSE:",
+        err?.response?.data
+      );
+
+      const errorMessage =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        "Unable to load patient profile";
+
+      setError(errorMessage);
+
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ==========================================
+  // LOAD PROFILE
+  // ==========================================
+
+  useEffect(() => {
+    getPatientProfile();
+  }, []);
+
+  // ==========================================
+  // USER DATA
+  // ==========================================
+
+  /*
+    Backend response expected:
+
+    {
+      success: true,
+      data: {
+        _id: "...",
+        user: {
+          fullName: "User Name",
+          phone: "...",
+          email: "...",
+          role: "patient"
+        }
+      }
+    }
+  */
+
+  const patientName =
+    patientProfile?.user?.fullName ||
+    patientProfile?.user?.name ||
+    storedUser?.fullName ||
+    storedUser?.name ||
+    "Patient";
+
+  const patientPhone =
+    patientProfile?.user?.phone ||
+    patientProfile?.phone ||
+    storedUser?.phone ||
+    "Not Available";
+
+  const patientEmail =
+    patientProfile?.user?.email ||
+    patientProfile?.email ||
+    storedUser?.email ||
+    "Not Available";
+
+  const patientRole =
+    patientProfile?.user?.role ||
+    storedUser?.role ||
+    "patient";
+
+  const abhaId =
+    patientProfile?.abhaId ||
+    patientProfile?.abhaNumber ||
+    patientProfile?.abha_id ||
+    storedUser?.abhaId ||
+    "Not Available";
+
+  const patientId =
+    patientProfile?._id ||
+    storedUser?._id ||
+    "Not Available";
+
+  const userInitial =
+    patientName?.charAt(0)?.toUpperCase() ||
+    "P";
+
+  // ==========================================
+  // LOADING
+  // ==========================================
+
+  if (loading) {
+    return (
+      <div className="min-h-[70vh] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+
+          <Loader2 className="h-10 w-10 animate-spin text-emerald-600" />
+
+          <div className="text-center">
+
+            <h2 className="font-bold text-lg text-slate-800 dark:text-white">
+              Loading Dashboard
+            </h2>
+
+            <p className="text-sm text-slate-500 mt-1">
+              Fetching your profile...
+            </p>
+
+          </div>
+
+        </div>
+      </div>
+    );
+  }
+
+  // ==========================================
+  // ERROR SCREEN
+  // ==========================================
+
+  if (error && !storedUser) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center px-4">
+
+        <Card className="max-w-md w-full border border-red-200">
+
+          <CardBody className="p-6 text-center space-y-4">
+
+            <div className="h-14 w-14 mx-auto rounded-full bg-red-50 flex items-center justify-center">
+
+              <AlertCircle className="h-7 w-7 text-red-500" />
+
+            </div>
+
+            <div>
+
+              <h2 className="font-bold text-lg text-slate-900 dark:text-white">
+                Unable to Load Dashboard
+              </h2>
+
+              <p className="text-sm text-red-500 mt-2">
+                {error}
+              </p>
+
+            </div>
+
+            <Button
+              variant="primary"
+              onClick={getPatientProfile}
+              leftIcon={
+                <RefreshCw className="h-4 w-4" />
+              }
+            >
+              Retry
+            </Button>
+
+          </CardBody>
+
+        </Card>
+
+      </div>
+    );
+  }
+
+  // ==========================================
+  // DASHBOARD
+  // ==========================================
+
+  return (
+    <div className="space-y-6 pb-10">
+
+      {/* ====================================== */}
+      {/* WELCOME HEADER */}
+      {/* ====================================== */}
+
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+
+        <div>
+
+          <div className="flex items-center gap-2 mb-2">
+
+            <Badge color="success">
+
+              <ShieldCheck className="h-3.5 w-3.5 mr-1" />
+
+              Verified Patient
+
+            </Badge>
+
+          </div>
+
+          <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
+
+            Welcome back,{" "}
+
+            <span className="text-emerald-600">
+              {patientName}
+            </span>
+
+            👋
+
+          </h1>
+
+          <p className="text-sm text-slate-500 mt-2">
+
+            Manage your health records, appointments and consultations
+            from one place.
+
           </p>
-        </div>
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="bg-slate-800/80 rounded-xl p-3.5 border border-slate-700/60 text-xs">
-            <span className="font-semibold text-slate-400 block mb-1">Assigned Health Outpost</span>
-            <span className="font-bold text-slate-100 flex items-center gap-1.5"><MapPin className="h-3.5 w-3.5 text-emerald-400"/> Dhami Rural PHC</span>
-          </div>
 
-          <Button variant="primary" size="sm" onClick={() => setVideoModalOpen(true)} leftIcon={<Play className="h-4 w-4 fill-white"/>} className="bg-rose-600 hover:bg-rose-700 text-white font-bold self-center shadow-md py-3">
-            Watch Treatment Video Guide
-          </Button>
+          {error && (
+            <p className="text-xs text-amber-600 mt-2">
+              Profile API could not load. Showing saved login user data.
+            </p>
+          )}
 
-          <Button variant="outline" size="sm" onClick={() => navigate('/hospitals')} leftIcon={<Landmark className="h-4 w-4 text-rose-400"/>} className="border-slate-700 text-slate-200 hover:bg-slate-800 font-bold self-center shadow-md py-3">
-            Generate Govt OPD Token 🎫
-          </Button>
         </div>
+
+        <Button
+          variant="primary"
+          size="lg"
+          onClick={() =>
+            navigate("/patient/teleconsult")
+          }
+          leftIcon={
+            <Video className="h-5 w-5" />
+          }
+          className="bg-emerald-600 hover:bg-emerald-700"
+        >
+          Start Teleconsultation
+        </Button>
+
       </div>
 
-      {/* Main Grid */}
+
+      {/* ====================================== */}
+      {/* PROFILE CARD */}
+      {/* ====================================== */}
+
+      <Card className="overflow-hidden border border-emerald-100 dark:border-emerald-900">
+
+        <div className="h-2 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500" />
+
+        <CardBody className="p-5 sm:p-6">
+
+          <div className="flex flex-col sm:flex-row sm:items-center gap-5">
+
+            {/* AVATAR */}
+
+            <div className="h-20 w-20 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white text-3xl font-bold shadow-lg">
+
+              {userInitial}
+
+            </div>
+
+
+            {/* PROFILE DETAILS */}
+
+            <div className="flex-1">
+
+              <p className="text-xs text-slate-500 uppercase tracking-wide">
+                Logged in Patient
+              </p>
+
+              <h2 className="text-xl font-bold text-slate-900 dark:text-white mt-1">
+
+                {patientName}
+
+              </h2>
+
+              <div className="flex flex-wrap gap-4 mt-3">
+
+                <div className="flex items-center gap-2 text-sm text-slate-500">
+
+                  <Phone className="h-4 w-4 text-emerald-600" />
+
+                  <span>
+                    {patientPhone}
+                  </span>
+
+                </div>
+
+
+                <div className="flex items-center gap-2 text-sm text-slate-500">
+
+                  <Mail className="h-4 w-4 text-emerald-600" />
+
+                  <span>
+                    {patientEmail}
+                  </span>
+
+                </div>
+
+              </div>
+
+            </div>
+
+
+            <Badge color="success">
+
+              <User className="h-3.5 w-3.5 mr-1" />
+
+              {patientRole}
+
+            </Badge>
+
+          </div>
+
+        </CardBody>
+
+      </Card>
+
+
+      {/* ====================================== */}
+      {/* SUMMARY CARDS */}
+      {/* ====================================== */}
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+
+
+        {/* ABHA */}
+
+        <Card>
+
+          <CardBody className="p-5">
+
+            <div className="h-11 w-11 rounded-xl bg-emerald-50 flex items-center justify-center">
+
+              <HeartPulse className="h-5 w-5 text-emerald-600" />
+
+            </div>
+
+            <p className="text-xs text-slate-500 mt-4">
+              ABHA Health ID
+            </p>
+
+            <p className="font-bold text-sm text-slate-900 dark:text-white mt-1 truncate">
+
+              {abhaId}
+
+            </p>
+
+          </CardBody>
+
+        </Card>
+
+
+        {/* APPOINTMENTS */}
+
+        <Card>
+
+          <CardBody className="p-5">
+
+            <div className="h-11 w-11 rounded-xl bg-blue-50 flex items-center justify-center">
+
+              <CalendarDays className="h-5 w-5 text-blue-600" />
+
+            </div>
+
+            <p className="text-xs text-slate-500 mt-4">
+              Upcoming Appointments
+            </p>
+
+            <p className="font-bold text-2xl text-slate-900 dark:text-white mt-1">
+              0
+            </p>
+
+            <p className="text-xs text-slate-400">
+              No upcoming appointments
+            </p>
+
+          </CardBody>
+
+        </Card>
+
+
+        {/* TELECONSULT */}
+
+        <Card>
+
+          <CardBody className="p-5">
+
+            <div className="h-11 w-11 rounded-xl bg-purple-50 flex items-center justify-center">
+
+              <Video className="h-5 w-5 text-purple-600" />
+
+            </div>
+
+            <p className="text-xs text-slate-500 mt-4">
+              Teleconsultation
+            </p>
+
+            <p className="font-bold text-2xl text-slate-900 dark:text-white mt-1">
+              Ready
+            </p>
+
+            <p className="text-xs text-emerald-600">
+              Doctors available
+            </p>
+
+          </CardBody>
+
+        </Card>
+
+
+        {/* PROFILE */}
+
+        <Card>
+
+          <CardBody className="p-5">
+
+            <div className="h-11 w-11 rounded-xl bg-orange-50 flex items-center justify-center">
+
+              <ClipboardList className="h-5 w-5 text-orange-600" />
+
+            </div>
+
+            <p className="text-xs text-slate-500 mt-4">
+              Patient Profile
+            </p>
+
+            <p className="font-bold text-sm text-slate-900 dark:text-white mt-1">
+              Active
+            </p>
+
+            <p className="text-xs text-slate-400 truncate">
+              ID: {patientId}
+            </p>
+
+          </CardBody>
+
+        </Card>
+
+      </div>
+
+
+      {/* ====================================== */}
+      {/* QUICK ACTIONS */}
+      {/* ====================================== */}
+
+      <Card>
+
+        <CardBody className="p-6">
+
+          <div className="mb-5">
+
+            <h2 className="font-bold text-lg text-slate-900 dark:text-white">
+              Quick Actions
+            </h2>
+
+            <p className="text-xs text-slate-500 mt-1">
+              Access healthcare services quickly.
+            </p>
+
+          </div>
+
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+
+            {/* BOOK APPOINTMENT */}
+
+            <button
+              type="button"
+              onClick={() =>
+                navigate("/patient/appointments")
+              }
+              className="group text-left border border-slate-200 dark:border-slate-800 rounded-xl p-4 hover:border-emerald-400 hover:shadow-md transition-all"
+            >
+
+              <div className="flex items-center justify-between">
+
+                <div className="h-11 w-11 rounded-xl bg-emerald-50 flex items-center justify-center">
+
+                  <CalendarDays className="h-5 w-5 text-emerald-600" />
+
+                </div>
+
+                <ChevronRight className="h-5 w-5 text-slate-400" />
+
+              </div>
+
+              <h3 className="font-bold text-sm mt-4">
+                Book Appointment
+              </h3>
+
+              <p className="text-xs text-slate-500 mt-1">
+                Find doctors and book appointments.
+              </p>
+
+            </button>
+
+
+            {/* VIDEO CONSULTATION */}
+
+            <button
+              type="button"
+              onClick={() =>
+                navigate("/patient/teleconsult")
+              }
+              className="group text-left border border-slate-200 dark:border-slate-800 rounded-xl p-4 hover:border-purple-400 hover:shadow-md transition-all"
+            >
+
+              <div className="flex items-center justify-between">
+
+                <div className="h-11 w-11 rounded-xl bg-purple-50 flex items-center justify-center">
+
+                  <Video className="h-5 w-5 text-purple-600" />
+
+                </div>
+
+                <ChevronRight className="h-5 w-5 text-slate-400" />
+
+              </div>
+
+              <h3 className="font-bold text-sm mt-4">
+                Video Consultation
+              </h3>
+
+              <p className="text-xs text-slate-500 mt-1">
+                Connect with doctors online.
+              </p>
+
+            </button>
+
+
+            {/* HEALTH RECORDS */}
+
+            <button
+              type="button"
+              onClick={() =>
+                navigate("/patient/records")
+              }
+              className="group text-left border border-slate-200 dark:border-slate-800 rounded-xl p-4 hover:border-blue-400 hover:shadow-md transition-all"
+            >
+
+              <div className="flex items-center justify-between">
+
+                <div className="h-11 w-11 rounded-xl bg-blue-50 flex items-center justify-center">
+
+                  <ClipboardList className="h-5 w-5 text-blue-600" />
+
+                </div>
+
+                <ChevronRight className="h-5 w-5 text-slate-400" />
+
+              </div>
+
+              <h3 className="font-bold text-sm mt-4">
+                Health Records
+              </h3>
+
+              <p className="text-xs text-slate-500 mt-1">
+                View your medical records.
+              </p>
+
+            </button>
+
+
+            {/* FIND HEALTHCARE */}
+
+            <button
+              type="button"
+              onClick={() =>
+                navigate("/patient/facilities")
+              }
+              className="group text-left border border-slate-200 dark:border-slate-800 rounded-xl p-4 hover:border-orange-400 hover:shadow-md transition-all"
+            >
+
+              <div className="flex items-center justify-between">
+
+                <div className="h-11 w-11 rounded-xl bg-orange-50 flex items-center justify-center">
+
+                  <MapPin className="h-5 w-5 text-orange-600" />
+
+                </div>
+
+                <ChevronRight className="h-5 w-5 text-slate-400" />
+
+              </div>
+
+              <h3 className="font-bold text-sm mt-4">
+                Find Healthcare
+              </h3>
+
+              <p className="text-xs text-slate-500 mt-1">
+                Find nearby hospitals and doctors.
+              </p>
+
+            </button>
+
+          </div>
+
+        </CardBody>
+
+      </Card>
+
+
+      {/* ====================================== */}
+      {/* HEALTH OVERVIEW */}
+      {/* ====================================== */}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* Left Column (ABHA & Journey Tracker) */}
-        <div className="lg:col-span-2 space-y-6">
-          
-          {/* Swasthya Journey Tracker */}
-          <Card className="border-l-4 border-l-teal-600">
-            <CardHeader className="flex justify-between items-center">
+
+        <Card className="lg:col-span-2">
+
+          <CardBody className="p-6">
+
+            <div className="flex items-center gap-3 mb-5">
+
+              <div className="h-10 w-10 rounded-xl bg-emerald-50 flex items-center justify-center">
+
+                <Activity className="h-5 w-5 text-emerald-600" />
+
+              </div>
+
               <div>
-                <h3 className="font-bold text-sm sm:text-base text-slate-900 dark:text-white">Active Swasthya Journey</h3>
-                <p className="text-[10px] text-slate-500">Track your referral and treatment path through Indian healthcare tiers</p>
-              </div>
-              <Activity className="h-4 w-4 text-teal-600 animate-pulse"/>
-            </CardHeader>
-            <CardBody className="p-6">
-              <div className="relative pl-6 border-l-2 border-slate-100 dark:border-slate-800 space-y-6">
-                {journeyTiers.map((j, idx) => (<div key={idx} className="relative">
-                    {/* Circle indicators */}
-                    <div className={`absolute -left-[31px] top-1.5 h-4.5 w-4.5 rounded-full border-2 flex items-center justify-center text-[9px] font-bold ${j.status === 'Completed'
-                ? 'bg-hospital-500 border-hospital-500 text-white'
-                : j.status === 'Active'
-                    ? 'bg-medical-500 border-medical-500 text-white animate-pulse'
-                    : 'bg-white border-slate-300 text-slate-400 dark:bg-slate-900 dark:border-slate-700'}`}>
-                      {j.status === 'Completed' ? '✓' : idx + 1}
-                    </div>
 
-                    <div className="flex justify-between items-start gap-4">
-                      <div>
-                        <h4 className={`text-xs font-bold ${j.status === 'Completed'
-                ? 'text-slate-800 dark:text-slate-200'
-                : j.status === 'Active'
-                    ? 'text-medical-600 dark:text-medical-450'
-                    : 'text-slate-400'}`}>
-                          {j.label}
-                        </h4>
-                        <p className="text-[10px] text-slate-500 mt-0.5">{j.desc}</p>
-                      </div>
-                      <Badge color={j.status === 'Completed' ? 'success' : j.status === 'Active' ? 'primary' : 'secondary'}>
-                        {j.status}
-                      </Badge>
-                    </div>
-                  </div>))}
-              </div>
-            </CardBody>
-          </Card>
+                <h2 className="font-bold text-lg">
+                  Health Overview
+                </h2>
 
-          {/* Quick Actions Portal */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <Card hoverable onClick={() => navigate('/portal/patient/book')} className="text-center">
-              <CardBody className="py-6 space-y-2">
-                <div className="mx-auto h-10 w-10 bg-teal-50 dark:bg-teal-950/20 text-teal-600 rounded-full flex items-center justify-center">
-                  <Stethoscope className="h-5 w-5"/>
-                </div>
-                <h4 className="font-bold text-xs">Consult Doctor</h4>
-                <p className="text-[9px] text-slate-550">Book local or referral OPD appointments</p>
-              </CardBody>
-            </Card>
+                <p className="text-xs text-slate-500">
+                  Your healthcare summary
+                </p>
 
-            <Card hoverable onClick={() => navigate('/portal/patient/records')} className="text-center">
-              <CardBody className="py-6 space-y-2">
-                <div className="mx-auto h-10 w-10 bg-indigo-50 dark:bg-indigo-950/20 text-indigo-600 rounded-full flex items-center justify-center">
-                  <FileText className="h-5 w-5"/>
-                </div>
-                <h4 className="font-bold text-xs">Diagnostic Reports</h4>
-                <p className="text-[9px] text-slate-550">Download ECG, Echo, & blood tests</p>
-              </CardBody>
-            </Card>
-
-            <Card hoverable onClick={() => navigate('/portal/patient/prescriptions')} className="text-center">
-              <CardBody className="py-6 space-y-2">
-                <div className="mx-auto h-10 w-10 bg-amber-50 dark:bg-amber-950/20 text-amber-600 rounded-full flex items-center justify-center">
-                  <Pill className="h-5 w-5"/>
-                </div>
-                <h4 className="font-bold text-xs">Pharmacies & Stock</h4>
-                <p className="text-[9px] text-slate-550">Check local generic inventory levels</p>
-              </CardBody>
-            </Card>
-          </div>
-
-        </div>
-
-        {/* Right Column (ABHA Card & Upcoming Appointments) */}
-        <div className="space-y-6">
-          
-          {/* Visual ABHA Health Card */}
-          <Card className="bg-gradient-to-tr from-slate-900 to-slate-800 dark:from-slate-950 dark:to-slate-900 text-white border-transparent">
-            <CardBody className="space-y-6">
-              <div className="flex justify-between items-start">
-                <div className="space-y-1">
-                  <span className="text-[8px] uppercase tracking-wider text-medical-400 font-bold">National Health Authority</span>
-                  <h3 className="text-sm font-extrabold">{user?.name}</h3>
-                </div>
-                <div className="h-8 w-8 rounded bg-white/10 flex items-center justify-center text-xs">💳</div>
               </div>
 
-              <div className="space-y-1 font-mono">
-                <span className="text-[8px] text-slate-400 block leading-none">ABHA HEALTH ID</span>
-                <span className="text-sm font-bold tracking-widest text-slate-200">{user?.abhaId}</span>
+            </div>
+
+
+            <div className="p-6 rounded-xl border border-dashed border-slate-200 text-center">
+
+              <HeartPulse className="h-10 w-10 mx-auto text-emerald-500 mb-3" />
+
+              <h3 className="font-semibold">
+                Your health records will appear here
+              </h3>
+
+              <p className="text-sm text-slate-500 mt-2">
+
+                Book appointments and consultations to build your health history.
+
+              </p>
+
+            </div>
+
+          </CardBody>
+
+        </Card>
+
+
+        {/* PROFILE DETAILS */}
+
+        <Card>
+
+          <CardBody className="p-6">
+
+            <div className="flex items-center gap-2 mb-5">
+
+              <User className="h-5 w-5 text-emerald-600" />
+
+              <div>
+
+                <h2 className="font-bold text-base">
+                  Patient Profile
+                </h2>
+
+                <p className="text-xs text-slate-500">
+                  Logged in user information
+                </p>
+
               </div>
 
-              <div className="grid grid-cols-2 gap-4 text-[10px] pt-4 border-t border-slate-800 text-slate-400">
-                <div>
-                  <span className="block text-[8px] text-slate-500 uppercase">Gender</span>
-                  <span className="font-bold text-slate-350">Male (42 Yrs)</span>
-                </div>
-                <div>
-                  <span className="block text-[8px] text-slate-500 uppercase">Blood Group</span>
-                  <span className="font-bold text-slate-350">O +</span>
-                </div>
-              </div>
-            </CardBody>
-            <CardFooter className="bg-slate-950 border-t border-slate-900/50 flex justify-between items-center text-[10px] text-slate-500 px-4 py-2">
-              <span className="flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5 text-hospital-500"/> Aadhaar Verified</span>
-              <span>Govt of India ABDM</span>
-            </CardFooter>
-          </Card>
+            </div>
 
-          {/* Upcoming Consultations */}
-          <Card>
-            <CardHeader className="flex justify-between items-center">
-              <h3 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white">Scheduled Appointments</h3>
-              <Calendar className="h-4 w-4 text-slate-400"/>
-            </CardHeader>
-            <CardBody className="p-0">
-              <div className="divide-y divide-slate-100 dark:divide-slate-850">
-                {myAppointments.map(a => (<div key={a.id} className="p-4 space-y-2 text-xs hover:bg-slate-50/50 dark:hover:bg-slate-900/10">
-                    <div className="flex justify-between items-start gap-2">
-                      <span className="font-bold text-slate-800 dark:text-slate-200">{a.doctorName}</span>
-                      <Badge color={a.status === 'Completed' ? 'success' : 'info'}>{a.status}</Badge>
-                    </div>
-                    <div className="text-[10px] text-slate-500 space-y-0.5">
-                      <p>🏥 {a.facilityName}</p>
-                      <p>📅 {a.date} | ⏰ {a.timeSlot}</p>
-                    </div>
-                  </div>))}
-                
-                {myAppointments.length === 0 && (<div className="p-6 text-center text-xs text-slate-400">
-                    No scheduled appointments.
-                  </div>)}
-              </div>
-            </CardBody>
-          </Card>
 
-        </div>
+            <div className="space-y-4">
+
+
+              {/* NAME */}
+
+              <div>
+
+                <p className="text-[11px] text-slate-400 uppercase">
+                  Full Name
+                </p>
+
+                <p className="text-sm font-semibold">
+
+                  {patientName}
+
+                </p>
+
+              </div>
+
+
+              {/* PHONE */}
+
+              <div>
+
+                <p className="text-[11px] text-slate-400 uppercase">
+                  Phone Number
+                </p>
+
+                <p className="text-sm font-semibold">
+
+                  {patientPhone}
+
+                </p>
+
+              </div>
+
+
+              {/* EMAIL */}
+
+              <div>
+
+                <p className="text-[11px] text-slate-400 uppercase">
+                  Email Address
+                </p>
+
+                <p className="text-sm font-semibold break-all">
+
+                  {patientEmail}
+
+                </p>
+
+              </div>
+
+
+              {/* ABHA */}
+
+              <div>
+
+                <p className="text-[11px] text-slate-400 uppercase">
+                  ABHA ID
+                </p>
+
+                <p className="text-sm font-semibold">
+
+                  {abhaId}
+
+                </p>
+
+              </div>
+
+            </div>
+
+          </CardBody>
+
+        </Card>
 
       </div>
 
-      {videoModalOpen && (<TreatmentVideoModal isOpen={videoModalOpen} onClose={() => setVideoModalOpen(false)}/>)}
 
-    </div>);
+      {/* ====================================== */}
+      {/* HEALTH MESSAGE */}
+      {/* ====================================== */}
+
+      <Card className="bg-gradient-to-r from-emerald-600 to-teal-600 border-none text-white">
+
+        <CardBody className="p-6">
+
+          <div className="flex flex-col sm:flex-row gap-4 sm:items-center justify-between">
+
+            <div className="flex items-start gap-4">
+
+              <div className="h-12 w-12 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
+
+                <Stethoscope className="h-6 w-6" />
+
+              </div>
+
+              <div>
+
+                <h3 className="font-bold text-lg">
+                  Your Health Matters, {patientName}
+                </h3>
+
+                <p className="text-sm text-emerald-50 mt-1">
+
+                  Keep your health profile updated for better healthcare services.
+
+                </p>
+
+              </div>
+
+            </div>
+
+
+            <Button
+              variant="outline"
+              onClick={() =>
+                navigate("/patient/profile")
+              }
+              className="bg-white text-emerald-700 hover:bg-emerald-50 border-white"
+            >
+              Update Profile
+            </Button>
+
+          </div>
+
+        </CardBody>
+
+      </Card>
+
+    </div>
+  );
 };
+
+export default PatientDashboard;
