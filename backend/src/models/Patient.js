@@ -100,7 +100,7 @@ const patientSchema = new mongoose.Schema({
         },
         relationship: {
             type: String,
-            enum: ['parent', 'spouse', 'sibling', 'child', 'relative', 'friend', 'other', null],
+            enum: ['parent', 'spouse', 'husband', 'wife', 'sibling', 'child', 'relative', 'friend', 'other', null],
             default: null,
         },
         phone: {

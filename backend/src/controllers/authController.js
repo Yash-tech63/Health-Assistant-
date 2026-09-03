@@ -53,7 +53,6 @@ class AuthController {
         const displayName = (fullName || name || '').trim();
         const selectedRole = role || 'patient';
 
-        // Validate required identity fields
         if (!displayName || !normalizedPhone || !password) {
             return next(ApiError.badRequest('Name, phone, and password are required'));
         }
@@ -123,13 +122,11 @@ class AuthController {
             return next(ApiError.badRequest('Phone number is required'));
         }
 
-        // Check if user exists
         const user = await User.findOne({ phone });
         if (!user) {
             return next(ApiError.notFound('User not found'));
         }
 
-        // Generate and store OTP
         const result = await otpService.generateAndStoreOTP(phone);
 
         res.status(200).json({
@@ -154,10 +151,8 @@ class AuthController {
             return next(ApiError.badRequest('Phone and OTP are required'));
         }
 
-        // Verify OTP
         const verificationResult = await otpService.verifyOTP(phone, otp);
 
-        // Update user's phone verification status
         await User.findOneAndUpdate(
             { phone },
             { isPhoneVerified: true, updatedAt: Date.now() }
@@ -179,61 +174,52 @@ class AuthController {
      * @access  Public
      */
     login = asyncHandler(async (req, res, next) => {
-        const { phone, password } = req.body;
+        const { phone, email, password } = req.body;
+        const credential = phone || email;
 
-        if (!phone || !password) {
-            return next(ApiError.badRequest('Phone and password are required'));
+        if (!credential || !password) {
+            return next(ApiError.badRequest('Phone or Email and password are required'));
         }
 
-        // Find user with password
-        const user = await User.findOne({ phone }).select('+password');
+        const user = await User.findOne({
+            $or: [{ phone: credential }, { email: String(credential).toLowerCase() }]
+        }).select('+password');
 
         if (!user) {
             return next(ApiError.unauthorized('Invalid credentials'));
         }
 
-        // Check if account is locked
         if (user.isLocked()) {
             return next(ApiError.unauthorized('Account is locked. Please try again later.'));
         }
 
-        // Check password
         const isPasswordValid = await user.comparePassword(password);
         if (!isPasswordValid) {
-            // Increment login attempts
             await user.incrementLoginAttempts();
             return next(ApiError.unauthorized('Invalid credentials'));
         }
 
-        // Check if phone is verified
         if (!user.isPhoneVerified && process.env.ENABLE_OTP_VERIFICATION === 'true') {
             return next(ApiError.unauthorized('Phone number not verified'));
         }
 
-        // Check if account is active
         if (!user.isActive) {
             return next(ApiError.unauthorized('Account is deactivated'));
         }
 
-        // Reset login attempts on successful login
         await user.resetLoginAttempts();
-
-        // Generate tokens
         const tokens = TokenGenerator.generateUserTokens(user);
 
-        // Store refresh token in Redis (optional, for token blacklisting)
         const refreshTokenKey = `refresh_token:${user._id}`;
-        await redisClient.set(refreshTokenKey, tokens.refreshToken, 7 * 24 * 60 * 60); // 7 days
+        await redisClient.set(refreshTokenKey, tokens.refreshToken, 7 * 24 * 60 * 60);
 
-        // Remove password from response
         user.password = undefined;
 
-        // Set cookies (optional)
         res.cookie('refreshToken', tokens.refreshToken, {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
             sameSite: 'strict',
-            maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+            maxAge: 7 * 24 * 60 * 60 * 1000,
         });
 
         res.status(200).json({
@@ -261,13 +247,11 @@ class AuthController {
             return next(ApiError.unauthorized('Refresh token is required'));
         }
 
-        // Verify refresh token
         const decoded = TokenGenerator.verifyRefreshToken(refreshToken);
         if (!decoded) {
             return next(ApiError.unauthorized('Invalid refresh token'));
         }
 
-        // Check if refresh token is blacklisted (optional)
         const refreshTokenKey = `refresh_token:${decoded.id}`;
         const storedToken = await redisClient.get(refreshTokenKey);
 
@@ -275,19 +259,14 @@ class AuthController {
             return next(ApiError.unauthorized('Refresh token is invalid or expired'));
         }
 
-        // Find user
         const user = await User.findById(decoded.id);
         if (!user || !user.isActive) {
             return next(ApiError.unauthorized('User no longer exists or is inactive'));
         }
 
-        // Generate new tokens
         const newTokens = TokenGenerator.generateUserTokens(user);
-
-        // Update refresh token in Redis
         await redisClient.set(refreshTokenKey, newTokens.refreshToken, 7 * 24 * 60 * 60);
 
-        // Update cookie
         res.cookie('refreshToken', newTokens.refreshToken, {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
@@ -312,17 +291,14 @@ class AuthController {
      */
     logout = asyncHandler(async (req, res, next) => {
         const { user } = req;
-
-        // Clear refresh token from Redis
         const refreshTokenKey = `refresh_token:${user._id}`;
         await redisClient.del(refreshTokenKey);
 
-        // Clear cookie
         res.clearCookie('refreshToken');
 
         res.status(200).json({
             success: true,
-            message: 'Logged out successfully',
+            message: 'Logout successful',
         });
     });
 
@@ -333,30 +309,13 @@ class AuthController {
      */
     getMe = asyncHandler(async (req, res, next) => {
         const user = await User.findById(req.user._id).select('-password');
-
         if (!user) {
             return next(ApiError.notFound('User not found'));
         }
 
-        let profile = user.toObject();
-
-        // Add role-specific data
-        if (user.role === 'patient') {
-            const patient = await Patient.findOne({ user: user._id });
-            if (patient) {
-                profile.patientData = patient;
-            }
-        } else if (user.role === 'doctor') {
-            // You would fetch doctor profile here
-            // const doctor = await Doctor.findOne({ user: user._id });
-            // if (doctor) {
-            //   profile.doctorData = doctor;
-            // }
-        }
-
         res.status(200).json({
             success: true,
-            data: profile,
+            data: { user },
         });
     });
 
@@ -366,29 +325,24 @@ class AuthController {
      * @access  Private
      */
     updateMe = asyncHandler(async (req, res, next) => {
-        const { name, email } = req.body;
-        const userId = req.user._id;
+        const allowedFields = ['name', 'email', 'avatar', 'gender', 'dateOfBirth', 'address'];
+        const updates = {};
 
-        // Fields that can be updated
-        const updateData = {};
-        if (name) updateData.name = name;
-        if (email) updateData.email = email;
+        Object.keys(req.body).forEach((key) => {
+            if (allowedFields.includes(key)) {
+                updates[key] = req.body[key];
+            }
+        });
 
-        // Update user
-        const user = await User.findByIdAndUpdate(
-            userId,
-            updateData,
-            { new: true, runValidators: true }
-        ).select('-password');
-
-        if (!user) {
-            return next(ApiError.notFound('User not found'));
-        }
+        const user = await User.findByIdAndUpdate(req.user._id, updates, {
+            new: true,
+            runValidators: true,
+        }).select('-password');
 
         res.status(200).json({
             success: true,
             message: 'Profile updated successfully',
-            data: user,
+            data: { user },
         });
     });
 
@@ -398,31 +352,22 @@ class AuthController {
      * @access  Private
      */
     changePassword = asyncHandler(async (req, res, next) => {
-        const { currentPassword, newPassword, confirmPassword } = req.body;
-        const userId = req.user._id;
+        const { currentPassword, newPassword } = req.body;
 
-        // Validate new password confirmation
-        if (newPassword !== confirmPassword) {
-            return next(ApiError.badRequest('New passwords do not match'));
+        if (!currentPassword || !newPassword) {
+            return next(ApiError.badRequest('Current password and new password are required'));
         }
 
-        // Find user with password
-        const user = await User.findById(userId).select('+password');
-        if (!user) {
-            return next(ApiError.notFound('User not found'));
-        }
-
-        // Verify current password
+        const user = await User.findById(req.user._id).select('+password');
         const isPasswordValid = await user.comparePassword(currentPassword);
+
         if (!isPasswordValid) {
             return next(ApiError.unauthorized('Current password is incorrect'));
         }
 
-        // Update password
         user.password = newPassword;
         await user.save();
 
-        // Invalidate all refresh tokens (optional security measure)
         const refreshTokenKey = `refresh_token:${user._id}`;
         await redisClient.del(refreshTokenKey);
 
@@ -444,36 +389,20 @@ class AuthController {
             return next(ApiError.badRequest('Phone number is required'));
         }
 
-        // Check if user exists
         const user = await User.findOne({ phone });
         if (!user) {
-            // Don't reveal that user doesn't exist for security
-            return res.status(200).json({
-                success: true,
-                message: 'If an account exists with this phone, a reset OTP has been sent',
-            });
+            return next(ApiError.notFound('User not found with this phone number'));
         }
 
-        // Generate password reset OTP
-        const resetToken = generateOTP(6);
-        const resetTokenKey = `password_reset:${phone}`;
-
-        // Store reset token in Redis (10 minutes expiry)
-        await redisClient.set(resetTokenKey, {
-            token: resetToken,
-            phone: phone,
-            attempts: 0,
-            generatedAt: Date.now(),
-        }, 600); // 10 minutes
-
-        // In production, send OTP via SMS
-        if (process.env.NODE_ENV === 'development') {
-            console.log(`🔐 Password reset OTP for ${phone}: ${resetToken}`);
-        }
+        const result = await otpService.generateAndStoreOTP(phone);
 
         res.status(200).json({
             success: true,
-            message: 'Password reset OTP sent',
+            message: 'Password reset OTP sent successfully',
+            data: {
+                phone: phone,
+                expirySeconds: result.expirySeconds,
+            },
         });
     });
 
@@ -483,53 +412,22 @@ class AuthController {
      * @access  Public
      */
     resetPassword = asyncHandler(async (req, res, next) => {
-        const { phone, otp, newPassword, confirmPassword } = req.body;
+        const { phone, otp, newPassword } = req.body;
 
-        if (!phone || !otp || !newPassword || !confirmPassword) {
-            return next(ApiError.badRequest('All fields are required'));
+        if (!phone || !otp || !newPassword) {
+            return next(ApiError.badRequest('Phone, OTP, and new password are required'));
         }
 
-        // Validate password confirmation
-        if (newPassword !== confirmPassword) {
-            return next(ApiError.badRequest('Passwords do not match'));
-        }
+        await otpService.verifyOTP(phone, otp);
 
-        // Verify reset OTP
-        const resetTokenKey = `password_reset:${phone}`;
-        const resetData = await redisClient.get(resetTokenKey);
-
-        if (!resetData) {
-            return next(ApiError.badRequest('Reset OTP expired or not found'));
-        }
-
-        if (resetData.token !== otp) {
-            // Increment attempts
-            resetData.attempts += 1;
-            await redisClient.set(resetTokenKey, resetData, 600);
-
-            if (resetData.attempts >= 3) {
-                await redisClient.del(resetTokenKey);
-                return next(ApiError.badRequest('Maximum OTP attempts exceeded. Please request new OTP.'));
-            }
-
-            const attemptsLeft = 3 - resetData.attempts;
-            return next(ApiError.badRequest(`Invalid OTP. ${attemptsLeft} attempt${attemptsLeft !== 1 ? 's' : ''} left.`));
-        }
-
-        // Find user
         const user = await User.findOne({ phone });
         if (!user) {
             return next(ApiError.notFound('User not found'));
         }
 
-        // Update password
         user.password = newPassword;
         await user.save();
 
-        // Delete reset token
-        await redisClient.del(resetTokenKey);
-
-        // Invalidate all refresh tokens
         const refreshTokenKey = `refresh_token:${user._id}`;
         await redisClient.del(refreshTokenKey);
 
@@ -546,7 +444,6 @@ class AuthController {
      */
     checkPhoneAvailability = asyncHandler(async (req, res, next) => {
         const { phone } = req.params;
-
         const user = await User.findOne({ phone });
 
         res.status(200).json({
@@ -579,18 +476,6 @@ class AuthController {
             },
         });
     });
-}
-
-// Helper function for OTP generation (for password reset)
-function generateOTP(length = 6) {
-    const digits = '0123456789';
-    let otp = '';
-
-    for (let i = 0; i < length; i++) {
-        otp += digits.charAt(Math.floor(Math.random() * digits.length));
-    }
-
-    return otp;
 }
 
 module.exports = new AuthController();

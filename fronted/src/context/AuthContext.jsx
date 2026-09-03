@@ -1,4 +1,6 @@
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { authAPI } from '../services/api';
+
 const mockProfiles = {
     patient: {
         id: 'P-101',
@@ -37,31 +39,101 @@ const mockProfiles = {
         avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?q=80&w=400&auto=format&fit=crop'
     }
 };
+
 const AuthContext = createContext(undefined);
+
 export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(() => {
         const saved = localStorage.getItem('auth_user');
-        return saved ? JSON.parse(saved) : null;
+        return saved ? JSON.parse(saved) : mockProfiles.patient;
     });
     const [role, setRole] = useState(() => {
-        return user ? user.role : null;
+        return user ? user.role : 'patient';
     });
-    const login = (email, targetRole) => {
-        // Simulated login check
-        const profile = mockProfiles[targetRole];
-        if (profile) {
-            setUser(profile);
-            setRole(targetRole);
-            localStorage.setItem('auth_user', JSON.stringify(profile));
-            return true;
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+
+    // Verify token on app load if available
+    useEffect(() => {
+        const token = localStorage.getItem('access_token');
+        if (token) {
+            authAPI.getMe()
+                .then((res) => {
+                    if (res?.data?.user) {
+                        const fetchedUser = res.data.user;
+                        setUser(fetchedUser);
+                        setRole(fetchedUser.role);
+                        localStorage.setItem('auth_user', JSON.stringify(fetchedUser));
+                    }
+                })
+                .catch(() => {
+                    // Retain current session or clear invalid token
+                });
         }
-        return false;
+    }, []);
+
+    // Real API Login
+    const loginReal = async (credential, password) => {
+        setLoading(true);
+        setError(null);
+        try {
+            const res = await authAPI.login({ phone: credential, password });
+            if (res?.success && res?.data) {
+                const { user: loggedUser, tokens } = res.data;
+                if (tokens?.accessToken) {
+                    localStorage.setItem('access_token', tokens.accessToken);
+                    localStorage.setItem('refresh_token', tokens.refreshToken || '');
+                }
+                setUser(loggedUser);
+                setRole(loggedUser.role);
+                localStorage.setItem('auth_user', JSON.stringify(loggedUser));
+                setLoading(false);
+                return { success: true, user: loggedUser };
+            }
+            throw new Error(res?.message || 'Login failed');
+        } catch (err) {
+            setError(err.message || 'Invalid credentials');
+            setLoading(false);
+            return { success: false, message: err.message };
+        }
     };
-    const logout = () => {
-        setUser(null);
-        setRole(null);
-        localStorage.removeItem('auth_user');
+
+    // Simulated / fallback quick login for UI preview
+    const login = (emailOrPhone, targetRole) => {
+        const profile = mockProfiles[targetRole] || mockProfiles.patient;
+        setUser(profile);
+        setRole(profile.role);
+        localStorage.setItem('auth_user', JSON.stringify(profile));
+        return true;
     };
+
+    // Real Registration
+    const registerReal = async (formData) => {
+        setLoading(true);
+        setError(null);
+        try {
+            const res = await authAPI.register(formData);
+            setLoading(false);
+            return res;
+        } catch (err) {
+            setError(err.message || 'Registration failed');
+            setLoading(false);
+            throw err;
+        }
+    };
+
+    const logout = async () => {
+        try {
+            await authAPI.logout().catch(() => {});
+        } finally {
+            setUser(null);
+            setRole(null);
+            localStorage.removeItem('auth_user');
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('refresh_token');
+        }
+    };
+
     const switchRole = (newRole) => {
         const profile = mockProfiles[newRole];
         if (profile) {
@@ -70,10 +142,24 @@ export const AuthProvider = ({ children }) => {
             localStorage.setItem('auth_user', JSON.stringify(profile));
         }
     };
-    return (<AuthContext.Provider value={{ user, role, login, logout, switchRole }}>
-      {children}
-    </AuthContext.Provider>);
+
+    return (
+        <AuthContext.Provider value={{
+            user,
+            role,
+            loading,
+            error,
+            login,
+            loginReal,
+            registerReal,
+            logout,
+            switchRole
+        }}>
+            {children}
+        </AuthContext.Provider>
+    );
 };
+
 export const useAuth = () => {
     const context = useContext(AuthContext);
     if (!context) {

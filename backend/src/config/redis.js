@@ -4,6 +4,7 @@ class RedisClient {
     constructor() {
         this.client = null;
         this.isConnected = false;
+        this.inMemoryStore = new Map();
     }
 
     /**
@@ -17,17 +18,16 @@ class RedisClient {
                     host: process.env.REDIS_HOST || 'localhost',
                     port: process.env.REDIS_PORT || 6379,
                     reconnectStrategy: (retries) => {
-                        if (retries > 10) {
-                            console.error('❌ Redis reconnection attempts exhausted');
-                            return new Error('Redis reconnection failed');
+                        if (retries > 3) {
+                            return new Error('Redis reconnection limit reached');
                         }
-                        return Math.min(retries * 100, 3000);
+                        return Math.min(retries * 100, 1000);
                     },
                 },
             });
 
             this.client.on('error', (err) => {
-                console.error('❌ Redis Client Error:', err);
+                // Log warning only
                 this.isConnected = false;
             });
 
@@ -37,7 +37,6 @@ class RedisClient {
             });
 
             this.client.on('end', () => {
-                console.log('🔻 Redis connection closed');
                 this.isConnected = false;
             });
 
@@ -45,19 +44,10 @@ class RedisClient {
             return this.client;
 
         } catch (error) {
-            console.error('❌ Redis connection failed:', error.message);
-            throw error;
+            console.warn('⚠️ Redis not available, using in-memory store fallback');
+            this.isConnected = false;
+            return null;
         }
-    }
-
-    /**
-     * Get Redis client instance
-     */
-    getClient() {
-        if (!this.client || !this.isConnected) {
-            throw new Error('Redis client not connected');
-        }
-        return this.client;
     }
 
     /**
@@ -65,11 +55,17 @@ class RedisClient {
      */
     async set(key, value, expirySeconds = null) {
         try {
-            const client = this.getClient();
-            if (expirySeconds) {
-                await client.setEx(key, expirySeconds, JSON.stringify(value));
+            if (this.isConnected && this.client) {
+                if (expirySeconds) {
+                    await this.client.setEx(key, expirySeconds, JSON.stringify(value));
+                } else {
+                    await this.client.set(key, JSON.stringify(value));
+                }
             } else {
-                await client.set(key, JSON.stringify(value));
+                this.inMemoryStore.set(key, {
+                    value,
+                    expiresAt: expirySeconds ? Date.now() + (expirySeconds * 1000) : null
+                });
             }
             return true;
         } catch (error) {
@@ -83,9 +79,18 @@ class RedisClient {
      */
     async get(key) {
         try {
-            const client = this.getClient();
-            const value = await client.get(key);
-            return value ? JSON.parse(value) : null;
+            if (this.isConnected && this.client) {
+                const value = await this.client.get(key);
+                return value ? JSON.parse(value) : null;
+            } else {
+                const entry = this.inMemoryStore.get(key);
+                if (!entry) return null;
+                if (entry.expiresAt && Date.now() > entry.expiresAt) {
+                    this.inMemoryStore.delete(key);
+                    return null;
+                }
+                return entry.value;
+            }
         } catch (error) {
             console.error('Redis get error:', error);
             return null;
@@ -97,8 +102,11 @@ class RedisClient {
      */
     async del(key) {
         try {
-            const client = this.getClient();
-            await client.del(key);
+            if (this.isConnected && this.client) {
+                await this.client.del(key);
+            } else {
+                this.inMemoryStore.delete(key);
+            }
             return true;
         } catch (error) {
             console.error('Redis delete error:', error);
@@ -111,9 +119,18 @@ class RedisClient {
      */
     async exists(key) {
         try {
-            const client = this.getClient();
-            const result = await client.exists(key);
-            return result === 1;
+            if (this.isConnected && this.client) {
+                const result = await this.client.exists(key);
+                return result === 1;
+            } else {
+                const entry = this.inMemoryStore.get(key);
+                if (!entry) return false;
+                if (entry.expiresAt && Date.now() > entry.expiresAt) {
+                    this.inMemoryStore.delete(key);
+                    return false;
+                }
+                return true;
+            }
         } catch (error) {
             console.error('Redis exists error:', error);
             return false;
@@ -138,4 +155,4 @@ class RedisClient {
 
 // Singleton instance
 const redisClient = new RedisClient();
-module.exports = redisClient;
+module.exports = redisClient;
